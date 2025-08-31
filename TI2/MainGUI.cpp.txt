@@ -1,0 +1,150 @@
+// MainGUI.cpp
+#include <windows.h>
+#include "TrustedInstallerCore.h"
+
+#define IDC_EDIT_COMMAND      101
+#define IDC_BTN_ENABLE_PRIVS  102
+#define IDC_BTN_START_TI      103
+#define IDC_BTN_RUN_SYSTEM    104
+#define IDC_BTN_RUN_TI        105
+#define IDC_EDIT_LOG          106
+
+HINSTANCE hInst;
+HWND hLogEdit;
+
+void AppendLog(const std::wstring& msg) {
+    int len = GetWindowTextLengthW(hLogEdit);
+    SendMessageW(hLogEdit, EM_SETSEL, len, len);
+    SendMessageW(hLogEdit, EM_REPLACESEL, FALSE, (LPARAM)(msg + L"\r\n").c_str());
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE:
+        CreateWindowW(L"STATIC", L"Command:",
+            WS_VISIBLE | WS_CHILD,
+            20, 20, 80, 20, hwnd, NULL, hInst, NULL);
+
+        CreateWindowW(L"EDIT", L"cmd.exe",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+            100, 20, 360, 24,
+            hwnd, (HMENU)IDC_EDIT_COMMAND, hInst, NULL);
+
+        CreateWindowW(L"BUTTON", L"Enable All Privileges",
+            WS_VISIBLE | WS_CHILD,
+            20, 60, 200, 30, hwnd, (HMENU)IDC_BTN_ENABLE_PRIVS, hInst, NULL);
+
+        CreateWindowW(L"BUTTON", L"Start TI Service",
+            WS_VISIBLE | WS_CHILD,
+            230, 60, 150, 30, hwnd, (HMENU)IDC_BTN_START_TI, hInst, NULL);
+
+        CreateWindowW(L"BUTTON", L"Run as SYSTEM",
+            WS_VISIBLE | WS_CHILD,
+            20, 100, 180, 30, hwnd, (HMENU)IDC_BTN_RUN_SYSTEM, hInst, NULL);
+
+        CreateWindowW(L"BUTTON", L"Run as TI",
+            WS_VISIBLE | WS_CHILD,
+            210, 100, 170, 30, hwnd, (HMENU)IDC_BTN_RUN_TI, hInst, NULL);
+
+        CreateWindowW(L"STATIC", L"Log:",
+            WS_VISIBLE | WS_CHILD,
+            20, 145, 40, 20, hwnd, NULL, hInst, NULL);
+
+        hLogEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", NULL,
+            WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+            20, 165, 440, 100, hwnd, (HMENU)IDC_EDIT_LOG, hInst, NULL);
+
+        break;
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDC_BTN_ENABLE_PRIVS:
+            if (EnableAllPrivileges()) {
+                AppendLog(L"[+] Privileges enabled.");
+            }
+            else {
+                AppendLog(L"[!] Failed to enable privileges.");
+            }
+            break;
+
+        case IDC_BTN_START_TI:
+            if (StartTrustedInstallerService()) {
+                AppendLog(L"[+] TI service started.");
+            }
+            else {
+                AppendLog(L"[!] Failed to start TI service.");
+            }
+            break;
+
+        case IDC_BTN_RUN_SYSTEM: {
+            wchar_t exePath[MAX_PATH];
+            GetModuleFileNameW(NULL, exePath, MAX_PATH);
+            std::wstring args = L"--elevated";
+
+            int len = GetWindowTextLengthW(GetDlgItem(hwnd, IDC_EDIT_COMMAND));
+            if (len > 0) {
+                std::wstring input(len + 1, L'\0');
+                GetWindowTextW(GetDlgItem(hwnd, IDC_EDIT_COMMAND), input.data(), len + 1);
+                input.resize(len); // Ensure correct string size
+                args += L" \"" + input + L"\"";
+            }
+
+            if (LaunchViaService(exePath, args)) {
+                AppendLog(L"[+] Launched as SYSTEM.");
+            }
+            else {
+                AppendLog(L"[!] Failed to launch as SYSTEM.");
+            }
+            break;
+        }
+
+        case IDC_BTN_RUN_TI: {
+            wchar_t buf[1024] = {};
+            GetWindowTextW(GetDlgItem(hwnd, IDC_EDIT_COMMAND), buf, 1024);
+            std::wstring cmd(buf);
+            if (RunWithTiToken(cmd)) {
+                AppendLog(L"[+] Successfully launched as TrustedInstaller.");
+            }
+            else {
+                DWORD err = GetLastError();
+                AppendLog(L"[!] Failed to launch as TrustedInstaller. Error code: " + std::to_wstring(err));
+            }
+            break;
+        }
+        }
+        break;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+    hInst = hInstance;
+    const wchar_t CLASS_NAME[] = L"TrustedInstallerGuiWindow";
+
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+
+    RegisterClassW(&wc);
+
+    HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"TrustedInstaller GUI",
+        WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 500, 320,
+        NULL, NULL, hInstance, NULL);
+
+    ShowWindow(hwnd, nCmdShow);
+
+    MSG msg = {};
+    while (GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    return 0;
+}
